@@ -19,11 +19,13 @@ help:
 	@echo "  ffi        Build FFI shims (.so files)"
 	@echo "  compile    Compile .sls modules to .so"
 	@echo "  run        Run kunabi in interpreter mode"
+	@echo "  binary     Build standalone binary"
 	@echo "  install    Install kunabi wrapper script to ~/bin"
 	@echo "  clean      Remove built artifacts"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make ffi compile && make run ARGS='help'"
+	@echo "  make binary && ./kunabi help"
 	@echo "  make install && kunabi help"
 
 ffi:
@@ -48,6 +50,14 @@ run: compile
 	CHEZ_LEVELDB_SHIM=$(CHEZ_LEVELDB_HOME)/leveldb_shim.so \
 	LD_LIBRARY_PATH=.:$(CHEZ_LEVELDB_HOME):$(CHEZ_YAML_HOME):$(CHEZ_ZLIB_HOME):$(CHEZ_SSL_HOME):$(CHEZ_HTTPS_HOME) \
 	$(SCHEME) --libdirs $(LIBDIRS) --script kunabi.ss $(ARGS)
+
+binary: compile
+	@echo "=== Building standalone kunabi binary ==="
+	JERBOA_DIR=$(JERBOA_HOME)/lib JERBOA_AWS_DIR=$(JERBOA_AWS_HOME)/lib \
+	CHEZ_LEVELDB_DIR=$(CHEZ_LEVELDB_HOME) CHEZ_YAML_DIR=$(CHEZ_YAML_HOME) \
+	CHEZ_ZLIB_DIR=$(CHEZ_ZLIB_HOME)/src CHEZ_HTTPS_DIR=$(CHEZ_HTTPS_HOME)/src CHEZ_SSL_DIR=$(CHEZ_SSL_HOME)/src \
+	LD_LIBRARY_PATH=.:$(CHEZ_LEVELDB_HOME):$(CHEZ_YAML_HOME):$(CHEZ_ZLIB_HOME):$(CHEZ_SSL_HOME) \
+	$(SCHEME) -q --libdirs $(LIBDIRS) < build-kunabi.ss
 
 install: compile
 	@echo "=== Installing kunabi ==="

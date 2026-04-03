@@ -54,13 +54,32 @@ S3 access uses the standard AWS credential chain via `jerboa-aws`. Configure cre
 
 ## Building
 
-### Install to ~/bin (Recommended)
+### Build Binary (Recommended for most users)
 
 ```bash
-make install
+make binary
 ```
 
-This compiles the modules and creates a `kunabi` wrapper script in `~/bin/`. Make sure `~/bin` is in your `PATH`.
+This builds a `kunabi` binary that embeds the Scheme code but links against system libraries (LevelDB, SSL, zlib). Requires these libraries installed on the target system:
+
+```bash
+# On Ubuntu/Debian:
+sudo apt install libleveldb-dev libssl-dev zlib1g-dev liblz4-dev libncurses-dev uuid-dev
+```
+
+Run from the build directory:
+```bash
+./kunabi help
+./kunabi load --bucket my-cloudtrail --prefix AWSLogs/
+./kunabi detect --summary
+```
+
+To run from another directory, set `LD_LIBRARY_PATH` to include the directory with the FFI shims:
+```bash
+LD_LIBRARY_PATH=/path/to/jerboa-kunabi /path/to/jerboa-kunabi/kunabi help
+```
+
+Or install with `make install` which creates a wrapper script in `~/bin/`.
 
 ### Development Mode
 
@@ -69,12 +88,13 @@ make ffi compile
 make run ARGS="help"
 ```
 
-### Manual Execution
+### Install to ~/bin (Development)
 
 ```bash
-scheme --libdirs ~/mine/jerboa/lib:~/mine/jerboa-aws/lib:~/mine/chez-leveldb:~/mine/chez-yaml:~/mine/chez-zlib/src:~/mine/chez-https/src:~/mine/chez-ssl/src:lib \
-  --script kunabi.ss help
+make install
 ```
+
+Creates a `kunabi` wrapper script in `~/bin/` that invokes the Scheme interpreter.
 
 ## Usage
 
