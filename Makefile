@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: build compile run binary install clean help ffi
+.PHONY: build compile run binary install clean help ffi docker
 
 SCHEME = scheme
 JERBOA_HOME ?= $(HOME)/mine/jerboa
@@ -9,24 +9,30 @@ CHEZ_YAML_HOME ?= $(HOME)/mine/chez-yaml
 CHEZ_ZLIB_HOME ?= $(HOME)/mine/chez-zlib
 CHEZ_HTTPS_HOME ?= $(HOME)/mine/chez-https
 CHEZ_SSL_HOME ?= $(HOME)/mine/chez-ssl
+GHERKIN_HOME ?= $(HOME)/mine/gherkin
 
-LIBDIRS = lib:$(JERBOA_HOME)/lib:$(JERBOA_AWS_HOME)/lib:$(CHEZ_LEVELDB_HOME):$(CHEZ_YAML_HOME):$(CHEZ_ZLIB_HOME)/src:$(CHEZ_HTTPS_HOME)/src:$(CHEZ_SSL_HOME)/src
+LIBDIRS = lib:$(JERBOA_HOME)/lib:$(GHERKIN_HOME)/src:$(JERBOA_AWS_HOME)/lib:$(CHEZ_LEVELDB_HOME):$(CHEZ_YAML_HOME):$(CHEZ_ZLIB_HOME)/src:$(CHEZ_HTTPS_HOME)/src:$(CHEZ_SSL_HOME)/src
 
 help:
 	@echo "kunabi - CloudTrail Log Analyzer (Jerboa Edition)"
 	@echo ""
-	@echo "Targets:"
-	@echo "  ffi        Build FFI shims (.so files)"
-	@echo "  compile    Compile .sls modules to .so"
-	@echo "  run        Run kunabi in interpreter mode"
-	@echo "  binary     Build standalone binary"
-	@echo "  install    Install kunabi wrapper script to ~/bin"
-	@echo "  clean      Remove built artifacts"
+	@echo "Build (Docker - recommended for deployment):"
+	@echo "  make docker            Build dynamically linked binary in Docker"
+	@echo "  make docker-musl       Build fully static musl binary in Docker"
+	@echo ""
+	@echo "Build (local - requires all dependencies):"
+	@echo "  make ffi               Build FFI shims (.so files)"
+	@echo "  make compile           Compile .sls modules to .so"
+	@echo "  make binary            Build standalone binary"
+	@echo ""
+	@echo "Other:"
+	@echo "  make run               Run kunabi in interpreter mode"
+	@echo "  make install           Install kunabi wrapper script to ~/bin"
+	@echo "  make clean             Remove built artifacts"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make ffi compile && make run ARGS='help'"
+	@echo "  make docker && docker run --rm kunabi-builder help"
 	@echo "  make binary && ./kunabi help"
-	@echo "  make install && kunabi help"
 
 ffi:
 	@echo "=== Building FFI shims ==="
@@ -89,3 +95,26 @@ clean:
 	rm -f kunabi_*.h
 
 # Example: make run ARGS="list users"
+
+# ─── Docker Build ────────────────────────────────────────────────────────────
+
+docker:
+	@echo "=== Building kunabi in Docker ==="
+	docker build --build-arg CACHE_BUST=$$(date +%s) -t kunabi-builder .
+	@echo "=== Docker build complete ==="
+	@echo ""
+	@echo "Run: docker run --rm kunabi-builder help"
+	@echo "Or extract binary: docker cp \$$(docker create kunabi-builder):/usr/local/bin/kunabi ./"
+
+docker-musl:
+	@echo "=== Building static kunabi binary (musl/Alpine) ==="
+	docker build -f Dockerfile.musl --build-arg CACHE_BUST=$$(date +%s) -t kunabi-musl-builder .
+	@echo "=== Extracting binary ==="
+	@id=$$(docker create kunabi-musl-builder) && \
+		docker cp $$id:/kunabi ./kunabi-musl && \
+		docker rm $$id > /dev/null
+	@echo ""
+	@ls -lh kunabi-musl
+	@file kunabi-musl
+	@echo ""
+	@echo "Test: ./kunabi-musl help"

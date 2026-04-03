@@ -1,0 +1,181 @@
+# Dockerfile.musl — Build kunabi as a fully static musl binary
+#
+# Uses Alpine Linux (musl-native) so all C/C++ libraries link cleanly.
+# The result is a single static binary with zero runtime dependencies.
+#
+# Usage:
+#   docker build -f Dockerfile.musl -t kunabi-musl-builder .
+#   id=$(docker create kunabi-musl-builder)
+#   docker cp $id:/kunabi ./kunabi-musl
+#   docker rm $id
+
+FROM alpine:3.20 AS builder
+
+# ── System dependencies ──────────────────────────────────────────────────────
+RUN apk add --no-cache \
+    build-base \
+    git \
+    ca-certificates \
+    curl \
+    linux-headers \
+    ncurses-dev \
+    ncurses-static \
+    util-linux-dev \
+    openssl-dev \
+    openssl-libs-static \
+    zlib-dev \
+    zlib-static \
+    lz4-dev \
+    lz4-static \
+    snappy-dev \
+    snappy-static \
+    leveldb-dev \
+    yaml-dev \
+    yaml-static \
+    cmake \
+    file \
+    patch
+
+# ── Rust toolchain (for jerboa-native-rs) ────────────────────────────────────
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --profile minimal \
+             --target x86_64-unknown-linux-musl
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME="/root/.rustup"
+
+# Set HOME early — everything under /build so paths are clean
+ENV HOME=/build
+WORKDIR /build
+
+# ── Build static LevelDB if Alpine package lacks .a ─────────────────────────
+RUN if [ ! -f /usr/lib/libleveldb.a ]; then \
+      cd /tmp && \
+      git clone --depth 1 --branch 1.23 https://github.com/google/leveldb.git && \
+      cd leveldb && mkdir build && cd build && \
+      cmake .. -DCMAKE_BUILD_TYPE=Release \
+               -DBUILD_SHARED_LIBS=OFF \
+               -DLEVELDB_BUILD_TESTS=OFF \
+               -DLEVELDB_BUILD_BENCHMARKS=OFF \
+               -DCMAKE_INSTALL_PREFIX=/usr && \
+      make -j$(nproc) && make install && \
+      cd /tmp && rm -rf leveldb; \
+    fi
+
+# ── Build Chez Scheme ────────────────────────────────────────────────────────
+RUN git clone --depth 1 https://github.com/ober/ChezScheme.git && \
+    cd ChezScheme && \
+    git submodule update --init --depth 1 && \
+    ./configure --threads --disable-x11 --installprefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    cd /build && rm -rf ChezScheme
+
+# ── Clone dependency repos ───────────────────────────────────────────────────
+ARG CACHE_BUST_DEPS=0
+WORKDIR /build/mine
+RUN git clone --depth 1 https://github.com/ober/jerboa.git && \
+    git clone --depth 1 https://github.com/ober/gherkin.git && \
+    git clone --depth 1 https://github.com/ober/chez-ssl.git && \
+    git clone --depth 1 https://github.com/ober/chez-https.git && \
+    git clone --depth 1 https://github.com/ober/chez-leveldb.git && \
+    git clone --depth 1 https://github.com/ober/chez-yaml.git && \
+    git clone --depth 1 https://github.com/ober/chez-zlib.git
+
+# ── Build Rust native library (musl target) ──────────────────────────────────
+RUN cd /build/mine/jerboa/jerboa-native-rs && \
+    CARGO_HOME=/build/.cargo \
+    RUSTFLAGS="--remap-path-prefix /build/.cargo/registry/src=crate --remap-path-prefix /build/mine=src" \
+    cargo build --release --target x86_64-unknown-linux-musl --no-default-features
+
+# ── Clone jerboa-aws ─────────────────────────────────────────────────────────
+ARG CACHE_BUST=0
+RUN cd /build/mine && git clone --depth 1 https://github.com/ober/jerboa-aws.git
+
+# ── Copy kunabi source ───────────────────────────────────────────────────────
+COPY . /build/mine/jerboa-kunabi
+
+# ── Set environment ──────────────────────────────────────────────────────────
+ENV JERBOA_HOME=/build/mine/jerboa
+ENV JERBOA_AWS_HOME=/build/mine/jerboa-aws
+ENV CHEZ_LEVELDB_HOME=/build/mine/chez-leveldb
+ENV CHEZ_YAML_HOME=/build/mine/chez-yaml
+ENV CHEZ_ZLIB_HOME=/build/mine/chez-zlib
+ENV CHEZ_HTTPS_HOME=/build/mine/chez-https
+ENV CHEZ_SSL_HOME=/build/mine/chez-ssl
+ENV GHERKIN_HOME=/build/mine/gherkin
+ENV LIBDIRS=lib:/build/mine/jerboa/lib:/build/mine/gherkin/src:/build/mine/jerboa-aws/lib:/build/mine/chez-leveldb:/build/mine/chez-yaml:/build/mine/chez-zlib/src:/build/mine/chez-https/src:/build/mine/chez-ssl/src
+
+# ── Detect Chez install directory ────────────────────────────────────────────
+RUN CHEZ_DIR=$(find /usr/local/lib -maxdepth 2 -name 'ta6le' -type d | head -1) && \
+    echo "CHEZ_DIR=$CHEZ_DIR" > /tmp/chez-env
+
+# ── Build FFI shims as .so (needed during initial Scheme compilation) ────────
+WORKDIR /build/mine/jerboa-kunabi
+RUN gcc -shared -fPIC -O2 -o leveldb_shim.so ${CHEZ_LEVELDB_HOME}/leveldb_shim.c -lleveldb && \
+    gcc -shared -fPIC -O2 -o chez_ssl_shim.so ${CHEZ_SSL_HOME}/chez_ssl_shim.c -lssl -lcrypto && \
+    gcc -shared -fPIC -O2 -o chez_zlib_shim.so ${CHEZ_ZLIB_HOME}/chez_zlib_shim.c -lz
+
+# ── Generate static build artifacts ──────────────────────────────────────────
+# This script:
+#   - Patches load-shared-object out of chez-ssl/zlib/leveldb (for static builds)
+#   - Recompiles all modules against patched libraries
+#   - Runs WPO (whole-program optimization)
+#   - Creates boot files with embedded library .so data
+#   - Generates C headers with embedded boot/program data
+RUN . /tmp/chez-env && \
+    export CHEZ_DIR && \
+    export JERBOA_DIR=${JERBOA_HOME}/lib && \
+    export JERBOA_AWS_DIR=${JERBOA_AWS_HOME}/lib && \
+    export CHEZ_LEVELDB_DIR=${CHEZ_LEVELDB_HOME} && \
+    export CHEZ_YAML_DIR=${CHEZ_YAML_HOME} && \
+    export CHEZ_ZLIB_DIR=${CHEZ_ZLIB_HOME}/src && \
+    export CHEZ_HTTPS_DIR=${CHEZ_HTTPS_HOME}/src && \
+    export CHEZ_SSL_DIR=${CHEZ_SSL_HOME}/src && \
+    export GHERKIN_DIR=${GHERKIN_HOME}/src && \
+    LD_LIBRARY_PATH=.:${CHEZ_LEVELDB_HOME}:${CHEZ_YAML_HOME}:${CHEZ_SSL_HOME} \
+    scheme -q --libdirs ${LIBDIRS} < build-static-artifacts.ss
+
+# ── Compile C and link fully static binary ───────────────────────────────────
+RUN . /tmp/chez-env && \
+    export CHEZ_DIR && \
+    NATIVE_LIB=/build/mine/jerboa/jerboa-native-rs/target/x86_64-unknown-linux-musl/release/libjerboa_native.a && \
+    echo "=== Compiling C sources ===" && \
+    gcc -c -O2 -o kunabi-main.o kunabi-main-static.c -I${CHEZ_DIR} -I. -Wall \
+        $([ -f "$NATIVE_LIB" ] && echo "-DHAS_JERBOA_NATIVE") && \
+    gcc -c -fPIC -O2 -o leveldb-shim.o ${CHEZ_LEVELDB_HOME}/leveldb_shim.c -Wall && \
+    gcc -c -fPIC -O2 -o ssl-shim.o ${CHEZ_SSL_HOME}/chez_ssl_shim.c -Wall && \
+    gcc -c -fPIC -O2 -o zlib-shim.o ${CHEZ_ZLIB_HOME}/chez_zlib_shim.c -Wall && \
+    echo "=== Linking fully static binary ===" && \
+    NATIVE_FLAGS="" && \
+    if [ -f "$NATIVE_LIB" ]; then \
+        echo "Including Rust native library" && \
+        NATIVE_FLAGS="$NATIVE_LIB"; \
+    fi && \
+    gcc -static -o kunabi-static \
+        kunabi-main.o \
+        leveldb-shim.o ssl-shim.o zlib-shim.o \
+        -L${CHEZ_DIR} -lkernel \
+        ${NATIVE_FLAGS} \
+        -lleveldb -lsnappy \
+        -lssl -lcrypto \
+        -lz -llz4 \
+        -lstdc++ \
+        -lncursesw \
+        -lm -lpthread \
+        -Wl,--allow-multiple-definition && \
+    echo "=== Stripping ===" && \
+    strip --strip-all kunabi-static && \
+    echo "=== Result ===" && \
+    ls -lh kunabi-static && \
+    file kunabi-static && \
+    (ldd kunabi-static 2>&1 || echo "  (Fully static - no dynamic dependencies)")
+
+# ── Verify ───────────────────────────────────────────────────────────────────
+RUN ./kunabi-static help
+
+# ── Output stage ─────────────────────────────────────────────────────────────
+FROM scratch
+COPY --from=builder /build/mine/jerboa-kunabi/kunabi-static /kunabi
+ENTRYPOINT ["/kunabi"]
+CMD ["help"]

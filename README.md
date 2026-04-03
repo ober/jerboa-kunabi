@@ -14,7 +14,43 @@ This is a port of [kunabi](https://github.com/ober/kunabi) from Gerbil Scheme to
 - **Full-Text Search**: Search across all stored events
 - **Static Binary**: Self-contained ELF binary with embedded boot files
 
-## Prerequisites
+## Building
+
+### Option 1: Docker Build (Recommended)
+
+Build a fully static musl binary with no runtime dependencies:
+
+```bash
+make kunabi-musl
+```
+
+This creates `kunabi-musl` - a single-file static binary that runs on any Linux system.
+
+### Option 2: Dynamic Binary
+
+Build a binary that links against system libraries:
+
+```bash
+# Install dependencies (Ubuntu/Debian)
+sudo apt install libleveldb-dev libssl-dev zlib1g-dev liblz4-dev libncurses-dev uuid-dev
+
+# Build
+make binary
+```
+
+Run:
+```bash
+./kunabi help
+```
+
+### Option 3: Development Mode
+
+```bash
+make ffi compile
+make run ARGS="help"
+```
+
+## Prerequisites (Dynamic Build Only)
 
 ### System Libraries
 
@@ -26,12 +62,6 @@ This is a port of [kunabi](https://github.com/ober/kunabi) from Gerbil Scheme to
 | `libz` | Gzip decompression of CloudTrail logs |
 | `libyaml` | YAML config parsing |
 
-On Debian/Ubuntu:
-
-```bash
-apt install libleveldb-dev libssl-dev zlib1g-dev libyaml-dev
-```
-
 ### Chez Scheme
 
 Requires [Chez Scheme](https://cisco.github.io/ChezScheme/) 10.x.
@@ -39,10 +69,13 @@ Requires [Chez Scheme](https://cisco.github.io/ChezScheme/) 10.x.
 ### Required Libraries
 
 - [jerboa](https://github.com/ober/jerboa) — Jerboa Scheme runtime
+- [gherkin](https://github.com/ober/gherkin) — Gherkin Scheme runtime
 - [jerboa-aws](https://github.com/ober/jerboa-aws) — AWS client (S3, credentials)
 - [chez-leveldb](https://github.com/ober/chez-leveldb) — LevelDB bindings
 - [chez-yaml](https://github.com/ober/chez-yaml) — YAML parsing
 - [chez-zlib](https://github.com/ober/chez-zlib) — Gzip decompression
+- [chez-ssl](https://github.com/ober/chez-ssl) — SSL/TLS bindings
+- [chez-https](https://github.com/ober/chez-https) — HTTPS client
 
 ### AWS Credentials
 
@@ -51,50 +84,6 @@ S3 access uses the standard AWS credential chain via `jerboa-aws`. Configure cre
 - `~/.aws/credentials` file
 - `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables
 - IAM instance roles (EC2/ECS)
-
-## Building
-
-### Build Binary (Recommended for most users)
-
-```bash
-make binary
-```
-
-This builds a `kunabi` binary that embeds the Scheme code but links against system libraries (LevelDB, SSL, zlib). Requires these libraries installed on the target system:
-
-```bash
-# On Ubuntu/Debian:
-sudo apt install libleveldb-dev libssl-dev zlib1g-dev liblz4-dev libncurses-dev uuid-dev
-```
-
-Run from the build directory:
-```bash
-./kunabi help
-./kunabi load --bucket my-cloudtrail --prefix AWSLogs/
-./kunabi detect --summary
-```
-
-To run from another directory, set `LD_LIBRARY_PATH` to include the directory with the FFI shims:
-```bash
-LD_LIBRARY_PATH=/path/to/jerboa-kunabi /path/to/jerboa-kunabi/kunabi help
-```
-
-Or install with `make install` which creates a wrapper script in `~/bin/`.
-
-### Development Mode
-
-```bash
-make ffi compile
-make run ARGS="help"
-```
-
-### Install to ~/bin (Development)
-
-```bash
-make install
-```
-
-Creates a `kunabi` wrapper script in `~/bin/` that invokes the Scheme interpreter.
 
 ## Usage
 
@@ -144,22 +133,46 @@ Creates a `kunabi` wrapper script in `~/bin/` that invokes the Scheme interprete
 ./kunabi reindex                           # Build composite indices
 ```
 
+## Configuration
+
+Create `~/.kunabi.yaml`:
+
+```yaml
+bucket: my-cloudtrail-bucket
+prefix: AWSLogs/123456789012/CloudTrail
+db: ./cloudtrail.db
+regions:
+  - us-east-1
+  - us-west-2
+duration: 7  # days
+omit:
+  events:
+    - DescribeInstances  # Noisy events to skip
+  filters:
+    - { user: "monitoring-user" }  # Skip monitoring account
+```
+
 ## Project Structure
 
 ```
 jerboa-kunabi/
   README.md
   Makefile
-  kunabi.ss             # CLI entry point
+  Dockerfile              # Docker build for static binary
+  build-kunabi.ss         # Dynamic binary build script
+  build-kunabi-musl.ss    # Static musl binary build script
+  build-kunabi-musl.sh    # Shell wrapper for musl build
+  kunabi.ss               # CLI entry point
+  kunabi-main.c           # C entry point for dynamic binary
   lib/
     kunabi/
-      config.sls        # Configuration loader
-      parser.sls        # CloudTrail JSON parser
-      storage.sls       # LevelDB storage engine
-      loader.sls        # S3 download with worker pool
-      query.sls         # Query engine
-      detection.sls     # Security detection rules
-      billing.sls       # Billing impact rules
+      config.sls          # Configuration loader
+      parser.sls          # CloudTrail JSON parser
+      storage.sls         # LevelDB storage engine
+      loader.sls          # S3 download with worker pool
+      query.sls           # Query engine
+      detection.sls       # Security detection rules
+      billing.sls         # Billing impact rules
 ```
 
 ## Differences from Gerbil Version
@@ -174,4 +187,3 @@ jerboa-kunabi/
 ## License
 
 ISC
-# jerboa-kunabi
