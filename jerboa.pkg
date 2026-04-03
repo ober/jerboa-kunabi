@@ -1,0 +1,10 @@
+(package:
+  kunabi
+  version: "1.0.0"
+  description: "CloudTrail log analyzer"
+  depend:
+  ("jerboa"
+   "jerboa-aws"
+   "chez-leveldb"
+   "chez-yaml"
+   "chez-zlib"))

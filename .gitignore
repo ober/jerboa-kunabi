@@ -1,0 +1,18 @@
+# Build artifacts
+*.so
+*.wpo
+*.boot
+*.o
+
+# Generated headers
+kunabi_*.h
+
+# Binary
+/kunabi
+
+# Database
+cloudtrail.db/
+
+# Symlinks to shims
+chez_ssl_shim.so
+chez_zlib_shim.so
