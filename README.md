@@ -54,26 +54,26 @@ S3 access uses the standard AWS credential chain via `jerboa-aws`. Configure cre
 
 ## Building
 
-### Build Static Binary (Recommended)
+### Install to ~/bin (Recommended)
 
 ```bash
-make binary
+make install
 ```
 
-Produces a self-contained `./kunabi` binary (~20MB) with all dependencies embedded.
+This compiles the modules and creates a `kunabi` wrapper script in `~/bin/`. Make sure `~/bin` is in your `PATH`.
 
-### Interpreter Mode
+### Development Mode
 
 ```bash
 make ffi compile
 make run ARGS="help"
 ```
 
-### Manual Build
+### Manual Execution
 
 ```bash
-scheme --libdirs ~/mine/jerboa/lib:~/mine/jerboa-aws/lib:~/mine/chez-leveldb:~/mine/chez-yaml/src:~/mine/chez-zlib/src:lib \
-  --script kunabi.ss <command> [options]
+scheme --libdirs ~/mine/jerboa/lib:~/mine/jerboa-aws/lib:~/mine/chez-leveldb:~/mine/chez-yaml:~/mine/chez-zlib/src:~/mine/chez-https/src:~/mine/chez-ssl/src:lib \
+  --script kunabi.ss help
 ```
 
 ## Usage
